@@ -1,0 +1,3 @@
+package postgres
+
+export { hello } from "./src/hello.cxy"

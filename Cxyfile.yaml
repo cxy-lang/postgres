@@ -1,0 +1,11 @@
+package:
+  name: postgres
+  version: 0.1.0
+  author: Carter Mbotho<lastcarter@gmail.com>
+  description: A wrapper around Postgres SQL database that can be used by Cxy applications
+  license: MIT
+
+dependencies: []
+
+tests:
+  - file: "src/**/*.cxy"
