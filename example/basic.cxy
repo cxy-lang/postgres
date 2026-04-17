@@ -1,0 +1,258 @@
+import { Database } from "../src/database.cxy"
+import { PgTransaction } from "../src/transaction.cxy"
+import { Vector } from "stdlib/vector.cxy"
+
+import "stdlib.h" as cstdlib
+
+struct User {
+    id: i64 = 0
+    name: String = null
+    email: String = null
+    age: i32 = 0
+}
+
+func createTable(db: &Database): !void {
+    var conn = db.connection()
+
+    // Drop existing table to ensure clean state
+    conn.exec("DROP TABLE IF EXISTS users")
+
+    // Create users table
+    conn.exec("""
+        CREATE TABLE users (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL,
+            email TEXT NOT NULL UNIQUE,
+            age INTEGER NOT NULL
+        )
+    """)
+
+    println("Table 'users' created successfully")
+}
+
+func insertUsers(db: &Database): !void {
+    var conn = db.connection()
+
+    // Insert some sample users
+    conn.exec(
+        "INSERT INTO users (name, email, age) VALUES ($1, $2, $3) ON CONFLICT (email) DO NOTHING",
+        "Alice Johnson",
+        "alice@example.com",
+        28
+    )
+
+    conn.exec(
+        "INSERT INTO users (name, email, age) VALUES ($1, $2, $3) ON CONFLICT (email) DO NOTHING",
+        "Bob Smith",
+        "bob@example.com",
+        35
+    )
+
+    conn.exec(
+        "INSERT INTO users (name, email, age) VALUES ($1, $2, $3) ON CONFLICT (email) DO NOTHING",
+        "Charlie Brown",
+        "charlie@example.com",
+        22
+    )
+
+    println("Sample users inserted")
+}
+
+func queryUsers(db: &Database): !void {
+    var conn = db.connection()
+
+    println("\n=== All Users ===")
+    var result = conn.exec("SELECT id, name, email, age FROM users ORDER BY id")
+
+    while result.next() {
+        var id = result.column[i64](0)
+        var name = result.column[String](1)
+        var email = result.column[String](2)
+        var age = result.column[i32](3)
+
+        println(f"{id}. {name} ({email}) - Age: {age}")
+    }
+}
+
+func queryUsersWithStruct(db: &Database): !void {
+    var conn = db.connection()
+
+    println("\n=== Users with Struct Mapping ===")
+    var result = conn.exec("SELECT id, name, email, age FROM users WHERE age > $1 ORDER BY age", 25)
+
+    var users = Vector[User]()
+    result >> users
+
+    for user, _ in users {
+        println(f"  {user.name} is {user.age} years old")
+    }
+}
+
+func queryWithTuple(db: &Database): !void {
+    var conn = db.connection()
+
+    println("\n=== User Count ===")
+    var result = conn.exec("SELECT COUNT(*), AVG(age) FROM users")
+
+    if result.next() {
+        var data = result.read[(i64, f64)]()
+        println(f"Total users: {data.0}, Average age: {data.1}")
+    }
+}
+
+func transactionExample(db: &Database): !void {
+    var conn = db.connection()
+
+    println("\n=== Transaction Example ===")
+
+    var tx = PgTransaction(&conn, false)  // Manual commit
+
+    // Insert a new user
+    tx.exec(
+        "INSERT INTO users (name, email, age) VALUES ($1, $2, $3)",
+        "David Wilson",
+        "david@example.com",
+        30
+    )
+
+    // Create a savepoint
+    tx.savepoint("before_update")
+
+    // Update age
+    tx.exec("UPDATE users SET age = age + 1 WHERE name = $1", "David Wilson")
+
+    // Rollback to savepoint (undo the age update)
+    tx.rollback("before_update")
+
+    // Commit the transaction (David is inserted, but age not incremented)
+    tx.commit()
+
+    println("Transaction completed with savepoint rollback")
+}
+
+func checkTableExists(db: &Database): !void {
+    var conn = db.connection()
+
+    if conn.hasTable("users") {
+        println("\n✓ Table 'users' exists")
+    }
+    else {
+        println("\n✗ Table 'users' does not exist")
+    }
+}
+
+func connectionPoolingExample(db: &Database): !void {
+    println("\n=== Connection Pooling Example ===")
+    println(f"Initial pool size: {db.poolSize()}")
+
+    // Get multiple connections to show pooling
+    println("\nGetting 3 connections sequentially (will reuse from pool)...")
+
+    for i in 0..3 {
+        var conn = db.connection()
+        var result = conn.exec("SELECT COUNT(*) FROM users")
+        if result.next() {
+            var count = result.column[i64](0)
+            println(f"  Connection {i + 1}: Found {count} users")
+        }
+        // Connection automatically returned to pool when 'conn' goes out of scope
+        var randomMs = cstdlib.rand() % 1500
+        sleepAsync(randomMs)
+    }
+
+    println(f"\nPool size after connections returned: {db.poolSize()}")
+    println("All connections were reused from the pool!")
+}
+
+func cleanupTable(db: &Database): !void {
+    var conn = db.connection()
+
+    conn.exec("DROP TABLE IF EXISTS users")
+    println("\nTable 'users' dropped")
+}
+
+func main(): !void {
+    // Connection string - modify as needed
+    var connStr = "host=localhost port=5432 dbname=testdb user=postgres password=postgres"
+
+    println("Connecting to PostgreSQL...")
+
+    // Open database with connection pooling (60 second keep-alive)
+    var db = Database.open(connStr, "public", false, -1, 60000) catch {
+        println("Failed to connect to database: ", ex!.what())
+        println("\nPlease ensure PostgreSQL is running and the connection parameters are correct:")
+        println("  - Host: localhost")
+        println("  - Port: 5432")
+        println("  - Database: testdb")
+        println("  - User: postgres")
+        println("  - Password: postgres")
+        println("\nYou can create the database with:")
+        println("  psql -U postgres -c 'CREATE DATABASE testdb'")
+        return
+    }
+
+    println("✓ Connected to PostgreSQL")
+    println("Connection pooling enabled with 60s keep-alive\n")
+
+    // Run examples
+    createTable(&db)
+
+    checkTableExists(&db) catch discard
+
+    insertUsers(&db) catch {
+        println("Failed to insert users: ", ex!.what())
+        return
+    }
+
+    queryUsers(&db) catch {
+        println("Failed to query users: ", ex!.what())
+        return
+    }
+
+    queryUsersWithStruct(&db) catch {
+        println("Failed to query with struct: ", ex!.what())
+        return
+    }
+
+    queryWithTuple(&db) catch {
+        println("Failed to query with tuple: ", ex!.what())
+        return
+    }
+
+    transactionExample(&db) catch {
+        println("Failed transaction example: ", ex!.what())
+        return
+    }
+
+    connectionPoolingExample(&db) catch {
+        println("Failed connection pooling example: ", ex!.what())
+        return
+    }
+
+    for i in 0..3 {
+        async connectionPoolingExample(&db)
+    }
+
+    sleepAsync(5000);
+    // Verify David was inserted
+    var conn = db.connection() catch {
+        println("Failed to get connection: ", ex!.what())
+        return
+    }
+
+    var result = conn.exec("SELECT name, age FROM users WHERE name = $1", "David Wilson") catch {
+        println("Failed to verify transaction: ", ex!.what())
+        return
+    }
+
+    if result.next() {
+        var name = result.column[String](0) catch "".S
+        var age = result.column[i32](1) catch 0
+        println(f"\nVerified: {name} is {age} years old (transaction worked)")
+    }
+
+    // Clean up
+    cleanupTable(&db) catch discard
+
+    println("\n✓ All examples completed successfully!")
+}

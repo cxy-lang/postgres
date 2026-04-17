@@ -1,0 +1,221 @@
+module connection
+
+##if (defined MACOS) {
+    import "libpq-fe.h" as libpq
+}
+else {
+    import "postgresql/libpq-fe.h" as libpq
+}
+
+import { HashMap } from "stdlib/hash.cxy"
+import { PgError, PgConnectionError, PgQueryError } from "./errors.cxy"
+import { PgStatement } from "./statement.cxy"
+import { PgResult } from "./result.cxy"
+
+pub class PgConnection {
+    type OnClose = lambda_of!(#func(_: ^libpq.PGconn) -> void)
+    _conn: ^libpq.PGconn = null
+    _stmtCache: HashMap[String, PgStatement]
+    _async: bool = false
+    _timeout: i64 = -1
+    _dbname: String
+    _onClose: OnClose
+
+    func `init`(conn: ^libpq.PGconn,
+        dbname: String,
+        isAsync: bool,
+        timeout: i64,
+        onClose: OnClose = null
+    ) {
+        _conn = conn
+        _dbname = &&dbname
+        _onClose = &&onClose
+        _async = isAsync
+        _timeout = timeout
+        _stmtCache = HashMap[String, PgStatement]()
+    }
+
+    func `deinit`() {
+        close()
+    }
+
+    func exec(sql: String, ...args: auto): !PgResult {
+        if _conn == null {
+            raise PgConnectionError("Connection is closed".S)
+        }
+
+        var stmt = PgStatement(_conn, &&sql, _async, _timeout)
+        return stmt.exec(...&&args)
+    }
+
+    func prepare(sql: String): !PgStatement {
+        if _conn == null {
+            raise PgConnectionError("Connection is closed".S)
+        }
+
+        // Check cache
+        var cached = _stmtCache.get(sql)
+        if !!cached {
+            return __copy!(*cached)
+        }
+
+        // Create new statement and cache it
+        var stmt = PgStatement(_conn, sql, _async, _timeout)
+        _stmtCache.insert(&&sql, stmt)
+        return &&stmt
+    }
+
+    func hasTable(name: string): !bool {
+        var result = this.exec(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = $1)",
+            name
+        )
+
+        if result.next() {
+            return result.column[bool](0)
+        }
+        return false
+    }
+
+    func hasTable(schema: string, name: string): !bool {
+        var result = this.exec(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = $2)",
+            schema,
+            name
+        )
+
+        if result.next() {
+            return result.column[bool](0)
+        }
+        return false
+    }
+
+    func close(): void {
+        if _conn != null {
+            if _onClose != null {
+                _onClose(_conn)
+            }
+            else {
+                libpq.PQfinish(_conn)
+            }
+            _conn = null
+        }
+    }
+
+    @inline
+    func isOpen(): bool => _conn != null
+
+    @inline
+    func connection(): ^libpq.PGconn => _conn
+
+    @inline
+    func dbname(): String => _dbname
+
+    func clearStatementCache() {
+        _stmtCache = HashMap[String, PgStatement]()
+    }
+
+    @[inline, static]
+    func param(os: &OutputStream, idx: i32) {
+        os << "$" << (idx + 1)
+    }
+
+    @[inline, static]
+    func sqlType[T](os: &OutputStream) {
+        #if T.isBoolean {
+            os << "boolean"
+        }
+        else #if T.isChar {
+            os << "char"
+        }
+        else #if T.isEnum {
+            sqlType[#{T.baseType}](os)
+        }
+        else #if T.isInteger {
+            #if T == #u8 || T == #i8 || T == #u16 || T == #i16 {
+                os << "smallint"
+            }
+            else #if T == #u32 || T == #i32 {
+                os << "integer"
+            }
+            else {
+                os << "bigint"
+            }
+        }
+        else #if T.isFloat {
+            #if T == #f32 {
+                os << "real"
+            }
+            else {
+                os << "double precision"
+            }
+        }
+        else #if T.isString {
+            os << "text"
+        }
+        else #if T.isClass && T.`isVector {
+            #const E = T.ElementType
+            sqlType[#{E}](os)
+            os << "[]"
+        }
+        else #if T.isOptional {
+            sqlType[#{T.targetType}](os)
+        }
+        else {
+            error!("unsupported type: {t}", #T)
+        }
+    }
+
+    func createTable[T](name: string): !void {
+        var sql = f"CREATE TABLE IF NOT EXISTS {name} ("
+        #const count = 0
+        #for const member: T.members {
+            #const sqlAttr = member.attributes.[:sql]
+            #if !member.isField || sqlAttr && sqlAttr.[:ignore] {
+                #continue
+            }
+            #const M = member.Tinfo
+            #if count > 0 {
+                sql << ", "
+            }
+
+            #if sqlAttr && !!sqlAttr.[:name] {
+                sql << mk_str!(#{sqlAttr.[:name]}, " ")
+            }
+            else {
+                sql << mk_str!(#{member.name}, " ")
+            }
+
+            sqlType[#{M}](&sql)
+
+            #if sqlAttr {
+                #if sqlAttr.[:primaryKey] {
+                    sql << " PRIMARY KEY"
+                }
+                #if sqlAttr.[:autoIncrement] {
+                    require!(
+                        M.isInteger,
+                        "autoIncrement field {s} must be an integer", #{member.name})
+                    sql << " GENERATED ALWAYS AS IDENTITY"
+                }
+                #if sqlAttr.[:unique] {
+                    sql << " UNIQUE"
+                }
+                #if sqlAttr.[:notNull] {
+                    require!(
+                        !M.isOptional,
+                        "non nullable field {s} cannot be optional", #{member.name})
+                    sql << " NOT NULL"
+                }
+                #if sqlAttr.[:references] {
+                    sql << " REFERENCES " << #{sqlAttr.[:references]}
+                }
+            }
+
+            #{count += 1}
+        }
+        sql << ")"
+
+        exec(&&sql)
+    }
+}

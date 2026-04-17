@@ -1,0 +1,91 @@
+module transaction
+import "stdlib/log.cxy"
+import { PgConnection } from "./connection.cxy"
+import { PgError } from "./errors.cxy"
+
+pub class PgTransaction {
+    @static
+    LOG_TAG = "PgTransaction"
+    _conn: &PgConnection
+    _active: bool = false
+    _autoCommit: bool = true
+
+    func `init`(conn: &PgConnection, autoCommit: bool = true) {
+        _conn = conn
+        _autoCommit = autoCommit
+        this.begin() catch {
+            ERR!( "Transaction begin failed: " << ex!.what() )
+        }
+    }
+
+    func `deinit`() {
+        if _active && _autoCommit {
+            this.commit() catch discard
+        }
+        else if _active {
+            this.rollback(null) catch discard
+        }
+    }
+
+    func begin(): !void {
+        if _active {
+            raise PgError("Transaction is already active")
+        }
+
+        _conn.exec("BEGIN")
+        _active = true
+    }
+
+    func commit(): !void {
+        if !_active {
+            raise PgError("No active transaction to commit")
+        }
+
+        _conn.exec("COMMIT")
+        _active = false
+    }
+
+    func rollback(savepoint: string = null): !void {
+        if !_active {
+            raise PgError("No active transaction to rollback")
+        }
+
+        if savepoint != null {
+            var sql = f"ROLLBACK TO SAVEPOINT {savepoint}"
+            _conn.exec(sql.str())
+        }
+        else {
+            _conn.exec("ROLLBACK")
+            _active = false
+        }
+    }
+
+    func savepoint(name: string): !void {
+        if !_active {
+            raise PgError("No active transaction for savepoint")
+        }
+
+        var sql = f"SAVEPOINT {name}"
+        _conn.exec(sql.str())
+    }
+
+    func release(name: string): !void {
+        if !_active {
+            raise PgError("No active transaction for release")
+        }
+
+        var sql = f"RELEASE SAVEPOINT {name}"
+        _conn.exec(sql.str())
+    }
+
+    func exec(sql: string, ...args: auto): !void {
+        if !_active {
+            raise PgError("No active transaction")
+        }
+
+        _conn.exec(sql, ...&&args)
+    }
+
+    @inline
+    func isActive(): bool => _active
+}

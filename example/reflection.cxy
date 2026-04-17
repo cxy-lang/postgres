@@ -1,0 +1,265 @@
+import { Database } from "../src/database.cxy"
+import { Vector } from "stdlib/vector.cxy"
+
+// Example struct with @sql attributes for reflection-based table creation
+struct Product {
+    @sql(primaryKey, autoIncrement)
+    id: i64
+
+    @sql(notNull)
+    name: String
+
+    @sql(name: "product_code", unique)
+    code: String
+
+    price: f64
+
+    @sql(notNull)
+    stock: i32
+
+    @sql(ignore)
+    internalCache: i32  // This field will NOT be created in the database
+}
+
+struct Customer {
+    @sql(primaryKey, autoIncrement)
+    id: i64
+
+    @sql(notNull)
+    name: String
+
+    email: String
+
+    age: i32
+
+    active: bool
+}
+
+struct Article {
+    @sql(primaryKey, autoIncrement, name: "article_id")
+    id: i64
+
+    @sql(notNull)
+    title: String
+
+    content: String
+
+    @sql(name: "view_count")
+    views: i64
+
+    published: bool
+}
+
+struct Order {
+    @sql(primaryKey, autoIncrement)
+    id: i64
+
+    @sql(references: "customers(id)", notNull)
+    customer_id: i64
+
+    @sql(notNull)
+    total_amount: f64
+
+    status: String
+}
+
+func demonstrateReflectionTable(db: &Database): !void {
+    var conn = db.connection()
+
+    // Clean up any existing tables from previous runs
+    conn.exec("DROP TABLE IF EXISTS products")
+    conn.exec("DROP TABLE IF EXISTS customers")
+    conn.exec("DROP TABLE IF EXISTS articles")
+
+    println("\n=== Reflection-Based Table Creation ===")
+
+    // Create Product table using reflection
+    println("\n1. Creating 'products' table from Product struct...")
+    conn.createTable[Product]("products")
+    println("   ✓ Table created with auto-incrementing id (GENERATED ALWAYS AS IDENTITY)")
+    println("   ✓ Field 'internalCache' was ignored (not in database)")
+
+    // Insert sample products (id auto-generated)
+    println("\n2. Inserting products...")
+    conn.exec(
+        "INSERT INTO products (name, product_code, price, stock) VALUES ($1, $2, $3, $4)",
+        "Laptop", "LAP-001", 999.99, 50
+    )
+    conn.exec(
+        "INSERT INTO products (name, product_code, price, stock) VALUES ($1, $2, $3, $4)",
+        "Mouse", "MOU-001", 29.99, 200
+    )
+    conn.exec(
+        "INSERT INTO products (name, product_code, price, stock) VALUES ($1, $2, $3, $4)",
+        "Keyboard", "KEY-001", 79.99, 100
+    )
+    println("   ✓ Inserted 3 products")
+
+    // Create Customer table
+    println("\n4. Creating 'customers' table from Customer struct...")
+    conn.createTable[Customer]("customers")
+    println("   ✓ Table created with columns: id, name, email, age, active")
+
+    // Insert customers (id auto-generated)
+    conn.exec(
+        "INSERT INTO customers (name, email, age, active) VALUES ($1, $2, $3, $4)",
+        "Alice Johnson", "alice@example.com", 28, true
+    )
+    conn.exec(
+        "INSERT INTO customers (name, email, age, active) VALUES ($1, $2, $3, $4)",
+        "Bob Smith", "bob@example.com", 35, true
+    )
+    conn.exec(
+        "INSERT INTO customers (name, email, age, active) VALUES ($1, $2, $3, $4)",
+        "Charlie Brown", "charlie@example.com", 22, false
+    )
+    println("   ✓ Inserted 3 products")
+
+    // Query products
+    println("\n3. Querying products...")
+    var result = conn.exec("SELECT name, price, stock FROM products ORDER BY price DESC")
+    while result.next() {
+        var name = result.column[String](0)
+        var price = result.column[f64](1)
+        var stock = result.column[i32](2)
+        println(f"   - {name}: ${price} (Stock: {stock})")
+    }
+
+    // Create Customer table
+    println("\n4. Creating 'customers' table from Customer struct...")
+    conn.createTable[Customer]("customers")
+    println("   ✓ Table created with columns: id, name, email, age, active")
+
+    // Insert customers (id auto-generated)
+    conn.exec(
+        "INSERT INTO customers (name, email, age, active) VALUES ($1, $2, $3, $4)",
+        "Alice Johnson", "alice@example.com", 28, true
+    )
+    conn.exec(
+        "INSERT INTO customers (name, email, age, active) VALUES ($1, $2, $3, $4)",
+        "Bob Smith", "bob@example.com", 35, true
+    )
+    conn.exec(
+        "INSERT INTO customers (name, email, age, active) VALUES ($1, $2, $3, $4)",
+        "Charlie Brown", "charlie@example.com", 22, false
+    )
+    println("   ✓ Inserted 3 customers")
+
+    // Query active customers
+    println("\n5. Querying active customers...")
+    var custResult = conn.exec("SELECT name, email, age FROM customers WHERE active = true")
+    while custResult.next() {
+        var name = custResult.column[String](0)
+        var email = custResult.column[String](1)
+        var age = custResult.column[i32](2)
+        println(f"   - {name} ({email}), age {age}")
+    }
+
+    // Create Article table with custom column names
+    println("\n6. Creating 'articles' table with custom column names...")
+    conn.createTable[Article]("articles")
+    println("   ✓ Table created (note: 'id' → 'article_id', 'views' → 'view_count')")
+
+    // Insert articles (article_id auto-generated)
+    // Insert articles (article_id auto-generated)
+    conn.exec(
+        "INSERT INTO articles (title, content, view_count, published) VALUES ($1, $2, $3, $4)",
+        "Getting Started with PostgreSQL", "Learn the basics...", 1500, true
+    )
+    conn.exec(
+        "INSERT INTO articles (title, content, view_count, published) VALUES ($1, $2, $3, $4)",
+        "Advanced Cxy Patterns", "Deep dive into...", 850, true
+    )
+    println("   ✓ Inserted 2 articles")
+
+    // Query articles
+    println("\n7. Querying published articles...")
+    var artResult = conn.exec("SELECT title, view_count FROM articles WHERE published = true ORDER BY view_count DESC")
+    while artResult.next() {
+        var title = artResult.column[String](0)
+        var views = artResult.column[i64](1)
+        println(f"   - {title} ({views} views)")
+    }
+
+    // Create Order table with foreign key
+    println("\n8. Creating 'orders' table with foreign key to customers...")
+    conn.createTable[Order]("orders")
+    println("   ✓ Table created with REFERENCES customers(id)")
+
+    // Insert orders referencing customers
+    println("\n9. Inserting orders...")
+    conn.exec(
+        "INSERT INTO orders (customer_id, total_amount, status) VALUES ($1, $2, $3)",
+        1, 299.99, "completed"
+    )
+    conn.exec(
+        "INSERT INTO orders (customer_id, total_amount, status) VALUES ($1, $2, $3)",
+        2, 149.50, "pending"
+    )
+    conn.exec(
+        "INSERT INTO orders (customer_id, total_amount, status) VALUES ($1, $2, $3)",
+        1, 89.99, "shipped"
+    )
+    println("   ✓ Inserted 3 orders")
+
+    // Query orders with customer info (JOIN)
+    println("\n10. Querying orders with customer names...")
+    var orderResult = conn.exec("""
+        SELECT o.id, c.name, o.total_amount, o.status
+        FROM orders o
+        JOIN customers c ON o.customer_id = c.id
+        ORDER BY o.id
+    """)
+    while orderResult.next() {
+        var orderId = orderResult.column[i64](0)
+        var custName = orderResult.column[String](1)
+        var amount = orderResult.column[f64](2)
+        var status = orderResult.column[String](3)
+        println(f"   Order #{orderId}: {custName} - ${amount} ({status})")
+    }
+
+    // Cleanup
+    println("\n11. Cleaning up...")
+    conn.exec("DROP TABLE IF EXISTS orders")  // Must drop first due to foreign key
+    conn.exec("DROP TABLE IF EXISTS products")
+    conn.exec("DROP TABLE IF EXISTS customers")
+    conn.exec("DROP TABLE IF EXISTS articles")
+    println("   ✓ All tables dropped")
+}
+
+func main(): !void {
+    println("=== PostgreSQL Reflection Example ===")
+    println("\nThis example demonstrates automatic table creation using reflection.")
+    println("The createTable[T] method analyzes struct fields and @sql attributes")
+    println("to generate CREATE TABLE DDL automatically.\n")
+
+    var connStr = "host=localhost port=5432 dbname=testdb user=postgres password=postgres"
+
+    println("Connecting to PostgreSQL...")
+    var db = Database.open(connStr) catch {
+        println("Failed to connect: ", ex!.what())
+        println("\nStart PostgreSQL with Docker:")
+        println("  docker run --name postgres-test \\")
+        println("    -e POSTGRES_PASSWORD=postgres \\")
+        println("    -e POSTGRES_DB=testdb \\")
+        println("    -p 5432:5432 -d postgres:16-alpine")
+        return
+    }
+
+    println("✓ Connected!\n")
+
+    demonstrateReflectionTable(&db) catch {
+        println("\nExample failed: ", ex!.what())
+        return
+    }
+
+    println("\n✓ All reflection examples completed successfully!")
+    println("\nKey takeaways:")
+    println("  - Use @sql(primaryKey) for primary keys")
+    println("  - Use @sql(autoIncrement) for auto-incrementing columns")
+    println("  - Use @sql(unique) for unique constraints")
+    println("  - Use @sql(notNull) for NOT NULL constraints")
+    println("  - Use @sql(name: \"column_name\") for custom column names")
+    println("  - Use @sql(references: \"table(column)\") for foreign keys")
+    println("  - Use @sql(ignore) to exclude fields from the table")
+}

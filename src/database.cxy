@@ -1,0 +1,183 @@
+module database
+
+##if (defined MACOS) {
+    import "libpq-fe.h" as libpq
+}
+else {
+    import "postgresql/libpq-fe.h" as libpq
+}
+
+import { LinkedList } from "stdlib/list.cxy"
+import { Channel, yld } from "stdlib/coro.cxy"
+
+import { PgConnection } from "./connection.cxy"
+import { PgConnectionError } from "./errors.cxy"
+
+struct ConnHandle {
+    conn: ^libpq.PGconn
+    alive: i64
+
+    func `init`(conn: ^libpq.PGconn, alive: i64) {
+        this.conn = conn
+        this.alive = alive
+    }
+}
+
+pub class Database {
+    _connStr: String
+    _dbname: String
+    _async: bool = false
+    _timeout: i64 = -1
+    _keepAlive: i64 = -1
+    _pool: LinkedList[ConnHandle]
+    _cleanupRunning: bool = false
+    _notify = Channel[bool]()
+
+
+    @private
+    func `init`(connStr: String, dbname: String, isAsync: bool, timeout: i64, keepAlive: i64) {
+        _connStr = &&connStr
+        _dbname = &&dbname
+        _async = isAsync
+        _timeout = timeout
+        _keepAlive = keepAlive
+        _pool = LinkedList[ConnHandle]()
+
+        if _keepAlive > 0 && _keepAlive < 3000 {
+            // Minimum 3 seconds keep alive
+            _keepAlive = 3000
+        }
+    }
+
+    func `deinit`() {
+        _notify.send(false) // cancel cleanup
+        for handle, _ in _pool {
+            if handle.conn != null {
+                libpq.PQfinish(handle.conn)
+            }
+        }
+        _pool.clear()
+    }
+
+    @static
+    func open(connStr: String, dbname: String = "public".S, isAsync: bool = false, timeout: i64 = -1, keepAlive: i64 = -1): !This {
+        // Verify connection string by opening and closing a connection
+        var testConn = libpq.PQconnectdb(connStr.str())
+        if testConn == null {
+            raise PgConnectionError("Failed to create connection".S)
+        }
+
+        var status = libpq.PQstatus(testConn)
+        if status != libpq.ConnStatusType.CONNECTION_OK {
+            var errMsg = libpq.PQerrorMessage(testConn)
+            libpq.PQfinish(testConn)
+            raise PgConnectionError(f"Connection failed: {errMsg !: string}")
+        }
+
+        libpq.PQfinish(testConn)
+
+        var db = This(&&connStr, &&dbname, isAsync, timeout, keepAlive)
+        return &&db
+    }
+
+    func connection(): !PgConnection {
+        var conn: ^libpq.PGconn = null
+        if !_pool.empty() {
+            // Try to reuse an idle connection from the pool
+            var handle = _pool.pop()
+            if handle.conn != null {
+                // Check if connection is still alive
+                var status = libpq.PQstatus(handle.conn)
+                if status == libpq.ConnStatusType.CONNECTION_OK {
+                    conn = handle.conn
+                }
+                else {
+                    // Connection is dead, close it
+                    libpq.PQfinish(handle.conn)
+                }
+            }
+        }
+
+        // No idle connections, create a new one
+        if conn == null {
+            conn = libpq.PQconnectdb(_connStr.str())
+            if conn == null {
+                raise PgConnectionError("Failed to create connection".S)
+            }
+        }
+
+        var status = libpq.PQstatus(conn)
+        if status != libpq.ConnStatusType.CONNECTION_OK {
+            var errMsg = libpq.PQerrorMessage(conn)
+            libpq.PQfinish(conn)
+            raise PgConnectionError(f"Connection failed: {errMsg !: string}")
+        }
+
+        if _keepAlive > 0 {
+            return PgConnection(conn, _dbname, _async, _timeout, (it: ^libpq.PGconn) => {
+                // Return the connection to the pool
+                this._returnConnection(it)
+            })
+        } else {
+            return PgConnection(conn, _dbname, _async, _timeout)
+        }
+    }
+
+    func _returnConnection(conn: ^libpq.PGconn): void {
+        if conn != null {
+            var handle = ConnHandle(conn, timestamp() + _keepAlive)
+            _pool.push(&&handle)
+            if !_cleanupRunning {
+                // Start cleanup coroutine
+                async cleanupLoop()
+            }
+        }
+    }
+
+    @private
+    func cleanupLoop(): void {
+        _cleanupRunning = true
+        while !_pool.empty() {
+            var it = _pool.begin()
+            // We want to cleanup expired connections and that will expire
+            // in the near future, so we scan up to 500ms ahead to avoid
+            // thrashing.
+            var t = timestamp() + 500
+            var prunned = 0 as u64
+            while it != null {
+                var conn = &it.value
+                if conn.alive <= t {
+                    _pool.erase(it)
+                    it = _pool.begin()
+                }
+                else {
+                    // Connection is still alive, break because all next connections
+                    // will also be alive.
+                    break
+                }
+
+                if ++prunned % 100 == 0 {
+                    // Yield to avoid blocking the event loop for too long.
+                    yld()
+                }
+            }
+
+            if it != null {
+                // Ensure that the cleanup routine will be rescheduled after at least 3 seconds
+                var expires = it.value.alive - t
+                var status = _notify.receive(expires)
+                if !!status && !*status {
+                    // We we explicitly cancelled
+                    break
+                }
+            }
+        }
+        _cleanupRunning = false
+    }
+
+    @inline
+    func dbname(): String => _dbname
+
+    @inline
+    func poolSize(): u64 => _pool.size()
+}

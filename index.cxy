@@ -1,3 +1,8 @@
 package postgres
 
-export { hello } from "./src/hello.cxy"
+export { PgError, PgConnectionError, PgQueryError } from "./src/errors.cxy"
+export { PgResult } from "./src/result.cxy"
+export { PgStatement } from "./src/statement.cxy"
+export { PgConnection } from "./src/connection.cxy"
+export { PgTransaction } from "./src/transaction.cxy"
+export { Database } from "./src/database.cxy"

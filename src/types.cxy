@@ -1,0 +1,298 @@
+module types
+
+import { htonl, htons, ntohs, ntohl } from "stdlib/endian.cxy"
+
+##if (defined MACOS) {
+    import "libpq-fe.h" as libpq
+}
+else {
+    import "postgresql/libpq-fe.h" as libpq
+}
+
+import "./types.h" as ctypes
+
+
+
+import { PgError } from "./errors.cxy"
+
+@__cc:clib "pq"
+
+// PostgreSQL OID type constants
+pub const BYTEAOID: u32 = 17
+pub const CHAROID: u32 = 18
+pub const INT8OID: u32 = 20
+pub const INT2OID: u32 = 21
+pub const INT4OID: u32 = 23
+pub const TEXTOID: u32 = 25
+pub const JSONOID: u32 = 114
+pub const FLOAT4OID: u32 = 700
+pub const FLOAT8OID: u32 = 701
+pub const BOOLOID: u32 = 16
+pub const BOOLARRAYOID: u32 = 1000
+pub const CHARARRAYOID: u32 = 1001
+pub const INT2ARRAYOID: u32 = 1005
+pub const INT4ARRAYOID: u32 = 1007
+pub const INT8ARRAYOID: u32 = 1016
+pub const TEXTARRAYOID: u32 = 1009
+pub const FLOAT4ARRAYOID: u32 = 1021
+pub const FLOAT8ARRAYOID: u32 = 1022
+pub const JSONBOID: u32 = 3802
+
+// Get OID type for a Cxy type
+pub func getOid[T](): u32 {
+    #if T.isChar {
+        return CHAROID
+    }
+    else #if T.isBoolean {
+        return BOOLOID
+    }
+    else #if T.isEnum {
+        return getOid[#{T.baseType}]()
+    }
+    else #if T.isInteger {
+        #if #T == #i16 || #T == #u16 {
+            return INT2OID
+        }
+        else #if #T == #i32 || #T == #u32 {
+            return INT4OID
+        }
+        else #if #T == #i64 || #T == #u64 {
+            return INT8OID
+        }
+        else {
+            return INT4OID
+        }
+    }
+    else #if T.isFloat {
+        #if #T == #f32 {
+            return FLOAT4OID
+        }
+        else {
+            return FLOAT8OID
+        }
+    }
+    else #if T.isString {
+        return TEXTOID
+    }
+    else #if T.isOptional {
+        return getOid[#{T.targetType}]()
+    }
+    else {
+        error!("type {t} is not supported for PostgreSQL binding", #T)
+    }
+}
+
+// Bind parameter result
+pub struct BindResult {
+    buffer: [u8, 16] = null
+    value: ^const char = null
+    length: i32 = 0
+    format: i32 = 0
+    oid: u32 = 0
+}
+
+// Bind a parameter for PQexecParams
+pub func bindParam[T](result: &BindResult, param: &const T) {
+    result.oid = getOid[T]()
+    #if T.isEnum {
+        bindParam[#{T.baseType}](result, param)
+    }
+    else #if T.isOptional {
+        if !!param {
+            bindParam(result, *param)
+        }
+    }
+    else #if T.isChar {
+        // Use buffer for char -> string conversion
+        result.buffer.[0] = param !: u8
+        result.buffer.[1] = '\0' as u8
+        result.value = result.buffer !: ^const char
+        result.length = 1
+        result.format = 0  // text
+    }
+    else #if T.isBoolean {
+        result.value = param ? "t" : "f"
+        result.length = 1
+        result.format = 0  // text
+    }
+    else #if T.isInteger {
+        #if #T == #i16 || #T == #u16 {
+            var buf = result.buffer !: ^u16
+            buf.[0] = htons(<u16>param)
+            result.value = result.buffer !: ^const char
+            result.length = sizeof!(#i16) as i32
+            result.format = 1  // binary
+        }
+        else #if #T == #i32 || #T == #u32 {
+            var buf = result.buffer !: ^u32
+            buf.[0] = htonl(<u32>param)
+            result.value = result.buffer !: ^const char
+            result.length = sizeof!(#i32) as i32
+            result.format = 1  // binary
+        }
+        else #if #T == #i64 || #T == #u64 {
+            var buf = result.buffer !: ^u64
+            var val = <u64>param
+            // Convert 64-bit to network byte order (swap 32-bit halves)
+            var low = htonl(<u32>(val & 0xFFFFFFFF))
+            var high = htonl(<u32>(val >> 32))
+            buf.[0] = (<u64>low << 32) | <u64>high
+            result.value = result.buffer !: ^const char
+            result.length = sizeof!(#i64) as i32
+            result.format = 1  // binary
+        }
+        else {
+            var buf = result.buffer !: ^u32
+            buf.[0] = htonl(<u32>param)
+            result.value = result.buffer !: ^const char
+            result.length = sizeof!(#i32) as i32
+            result.format = 1  // binary
+        }
+    }
+    else #if T.isFloat {
+        #if #T == #f32 {
+            var buf = result.buffer !: ^ctypes.Float4Conv
+            buf.f = <f32>param
+            buf.u = htonl(buf.u)
+            result.value = result.buffer !: ^const char
+            result.length = sizeof!(#f32) as i32
+            result.format = 1  // binary
+        }
+        else {
+            var buf = result.buffer !: ^ctypes.Float8Conv
+            buf.d = <f64>param
+            var tmp1 = buf.u32_1
+            var tmp2 = buf.u32_2
+            buf.u32_1 = htonl(tmp2)
+            buf.u32_2 = htonl(tmp1)
+            result.value = result.buffer !: ^const char
+            result.length = sizeof!(#f64) as i32
+            result.format = 1  // binary
+        }
+    }
+    else #if T.isString {
+        #if #T == #string {
+            result.value = param !: ^const char
+            result.length = <i32>strlen(param)
+            result.format = 0  // text
+        }
+        else {
+            result.value = param.str()
+            result.length = <i32>param.size()
+            result.format = 0  // text
+        }
+    }
+    else {
+        error!("type {t} is not supported for PostgreSQL binding", #T)
+    }
+}
+
+// Read a column value from a PGresult
+pub func readColumn[T](result: ^libpq.PGresult, row: i32, col: i32): !T {
+    if libpq.PQgetisnull(result, row, col) {
+        #if T.isOptional {
+            return None[T]()
+        }
+        else #if T.isClass {
+            return null as T
+        }
+        else {
+            raise PgError(f"Column {col} is non nullable")
+        }
+    }
+
+    var data = libpq.PQgetvalue(result, row, col)
+
+    #if T.isOptional {
+        return readColumn[T.targetType](result, row, col)
+    }
+    else #if T.isChar {
+        var format = libpq.PQfformat(result, col)
+        if format == 1 {
+            return data.[0]
+        }
+        else {
+            return data.[0]
+        }
+    }
+    else #if T.isBoolean {
+        var format = libpq.PQfformat(result, col)
+        if format == 1 {
+            return data.[0] != 0 as char
+        }
+        else {
+            return data.[0] == 't' || data.[0] == 'T' || data.[0] == '1'
+        }
+    }
+    else #if T.isInteger {
+        var format = libpq.PQfformat(result, col)
+        if format == 1 {
+            // Binary format
+            #if #T == #i16 || #T == #u16 {
+                var val = *(data !: ^u16)
+                return <T>ntohs(val)
+            }
+            else #if #T == #i32 || #T == #u32 {
+                var val = *(data !: ^u32)
+                return <T>ntohl(val)
+            }
+            else #if #T == #i64 || #T == #u64 {
+                var p = data !: ^u32
+                var high = <u64>ntohl(p.[0])
+                var low = <u64>ntohl(p.[1])
+                return <T>((high << 32) | low)
+            }
+            else {
+                var val = *(data !: ^u32)
+                return <T>ntohl(val)
+            }
+        }
+        else {
+            // Text format
+            var length = libpq.PQgetlength(result, row, col)
+            var str = __string(data !: string, length)
+            return str.toi[T]()
+        }
+    }
+    else #if T.isFloat {
+        var format = libpq.PQfformat(result, col)
+        if format == 1 {
+            // Binary format
+            #if #T == #f32 {
+                var conv = data !: ^ctypes.Float4Conv
+                conv.u = ntohl(conv.u)
+                return <T>conv.f
+            }
+            else {
+                var conv = data !: ^ctypes.Float8Conv
+                var tmp1 = ntohl(conv.u32_1)
+                var tmp2 = ntohl(conv.u32_2)
+                conv.u32_1 = tmp2
+                conv.u32_2 = tmp1
+                return <T>conv.d
+            }
+        }
+        else {
+            // Text format
+            var length = libpq.PQgetlength(result, row, col)
+            var str = __string(data !: string, length)
+            return str.tof[T]()
+        }
+    }
+    else #if T.isString {
+        #if #T == #string {
+            return data
+        }
+        else #if #T == #__string {
+            var length = libpq.PQgetlength(result, row, col)
+            return __string(data, length)
+        }
+        else {
+            var length = libpq.PQgetlength(result, row, col)
+            return String(data, length)
+        }
+    }
+    else {
+        error!("type {t} is not supported for reading from PostgreSQL", #T)
+    }
+}

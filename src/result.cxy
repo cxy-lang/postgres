@@ -1,0 +1,137 @@
+module result
+
+import { Vector } from "stdlib/vector.cxy"
+import { PgError } from "./errors.cxy"
+import { readColumn } from "./types.cxy"
+
+##if (defined MACOS) {
+    import "libpq-fe.h" as libpq
+}
+else {
+    import "postgresql/libpq-fe.h" as libpq
+}
+
+pub class PgResult {
+    _result: ^libpq.PGresult = null
+    _row: i32 = 0
+    _numRows: i32 = 0
+    _numCols: i32 = 0
+    _first: bool = true
+
+    func `init`(result: ^libpq.PGresult) {
+        _result = result
+        if _result != null {
+            _numRows = libpq.PQntuples(_result)
+            _numCols = libpq.PQnfields(_result)
+        }
+    }
+
+    func `deinit`() {
+        if _result != null {
+            libpq.PQclear(_result)
+            _result = null
+        }
+    }
+
+    func next(): bool {
+        if _first {
+            _first = false
+            return _row < _numRows
+        }
+        _row++
+        return _row < _numRows
+    }
+
+    func column[T](index: i32): !T {
+        if _result == null {
+            raise PgError("No result available")
+        }
+        if _row >= _numRows {
+            raise PgError("No more rows available")
+        }
+        if index >= _numCols {
+            raise PgError(f"Column index {index} out of range (max: {_numCols - 1})")
+        }
+        return readColumn[T](_result, _row, index)
+    }
+
+    func read[T](): !T {
+        if _result == null {
+            raise PgError("No result available")
+        }
+        if _row >= _numRows {
+            raise PgError("No more rows available")
+        }
+
+        #if T.isTuple {
+            var res: T = null
+            #for (const i: 0..T.membersCount) {
+                #const M = typeat!(#T, i)
+                if #{i} < _numCols {
+                    res.#{i} = readColumn[#{M}](_result, _row, #{i})
+                }
+            }
+            return &&res
+        }
+        else #if T.isStruct {
+            require!(T.hasDefaultInit || !T.hasInit, "type `{t}` needs to be default constructible", #T)
+            var res: T = #{T.hasDefaultInit? T() : T{}}
+
+            @consistent #for (const member: T.members, member.isField) {
+                #const M = member.Tinfo
+                #const sqlAttr = member.attributes.[:sql]
+
+                #if sqlAttr && sqlAttr.[:ignore] {
+                    // Skip this field
+                }
+                else #if sqlAttr && sqlAttr.[:id] {
+                    // Use explicit column index
+                    #const colId = sqlAttr.[:id]
+                    if #{colId} < _numCols {
+                        res.#{mk_ident!(member.name)} = readColumn[#{M}](_result, _row, #{colId})
+                    }
+                }
+                else {
+                    // Match by column name
+                    #const name = member.name
+                    var colName = #{name}
+                    #if sqlAttr && sqlAttr.[:name] {
+                        colName = #{sqlAttr.[:name]}
+                    }
+
+                    var colIdx = libpq.PQfnumber(_result, colName)
+                    if colIdx >= 0 {
+                        res.#{mk_ident!(member.name)} = readColumn[#{M}](_result, _row, colIdx)
+                    }
+                }
+            }
+            return &&res
+        }
+        else {
+            // Single value, read first column
+            return readColumn[T](_result, _row, 0)
+        }
+    }
+
+    func `>>`[T](vec: &T): !void {
+        require!(T.annotations.[:isVector], "T must be a Vector type")
+        while (next()) {
+            vec.push(read[T.ElementType]())
+        }
+    }
+
+    @inline
+    func empty(): bool => _result == null || _numRows == 0
+
+    @inline
+    func size(): i32 => _numRows
+
+    @inline
+    func numColumns(): i32 => _numCols
+
+    @inline
+    func reset() {
+        _row = 0
+        _first = true
+    }
+}
