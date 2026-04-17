@@ -31,11 +31,40 @@ cxy package install
 
 ### System Requirements
 
-You need PostgreSQL client library (`libpq`) installed:
+#### Build-Time Dependencies
+
+For compiling your Cxy application with the `@postgres` package:
 
 - **macOS**: `brew install postgresql`
 - **Ubuntu/Debian**: `apt-get install libpq-dev`
-- **Alpine**: `apk add postgresql-dev`
+- **Alpine**: `apk add libpq-dev`
+
+#### Runtime Dependencies
+
+For running the compiled binary, you only need the PostgreSQL client libraries (not the `-dev` packages):
+
+- **macOS**: `brew install libpq` (or `postgresql` - same thing)
+- **Ubuntu/Debian**: `apt-get install libpq5`
+- **Alpine**: `apk add libpq`
+
+**Docker Multi-Stage Build Example:**
+
+```dockerfile
+# Build stage
+FROM alpine:latest AS builder
+RUN apk add --no-cache libpq-dev build-base cxy
+COPY . /app
+WORKDIR /app
+RUN cxy build --release
+
+# Runtime stage - much smaller!
+FROM alpine:latest
+RUN apk add --no-cache libpq
+COPY --from=builder /app/build/myapp /usr/local/bin/
+CMD ["myapp"]
+```
+
+**Note:** The `-dev` packages include headers and static libraries needed for compilation. Runtime containers only need the shared libraries (`.so` files).
 
 ## Quick Start
 
@@ -753,10 +782,14 @@ launch {
 **Problem:** `undefined reference to PQconnectdb` or similar libpq errors
 
 **Solutions:**
-- Install PostgreSQL development libraries:
+- Install PostgreSQL development libraries (build-time):
   - macOS: `brew install postgresql`
   - Ubuntu/Debian: `apt-get install libpq-dev`
-  - Alpine: `apk add postgresql-dev`
+  - Alpine: `apk add libpq-dev`
+- For runtime-only containers, install runtime libraries:
+  - macOS: `brew install libpq`
+  - Ubuntu/Debian: `apt-get install libpq5`
+  - Alpine: `apk add libpq`
 - Ensure `libpq` is in your library path
 - Check that `@__cc:lib "pq"` is present in the package
 
