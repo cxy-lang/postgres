@@ -10,5 +10,7 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
+      - name: Install libpq-dev
+        run: apt-get update && apt-get install -y libpq-dev
       - name: Build
         run: cxy package test --verbose
