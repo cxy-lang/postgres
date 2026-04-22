@@ -191,7 +191,8 @@ pub func bindParam[T](result: &BindResult, param: &const T) {
 pub func readColumn[T](result: ^libpq.PGresult, row: i32, col: i32): !T {
     if libpq.PQgetisnull(result, row, col) {
         #if T.isOptional {
-            return None[T]()
+            #const M = T.targetType
+            return None[#{M}]()
         }
         else #if T.isClass {
             return null as T
@@ -201,12 +202,12 @@ pub func readColumn[T](result: ^libpq.PGresult, row: i32, col: i32): !T {
         }
     }
 
-    var data = libpq.PQgetvalue(result, row, col)
-
     #if T.isOptional {
-        return readColumn[T.targetType](result, row, col)
+        #const M = T.targetType
+        return Some[#{M}](readColumn[#{M}](result, row, col))
     }
     else #if T.isChar {
+        var data = libpq.PQgetvalue(result, row, col)
         var format = libpq.PQfformat(result, col)
         if format == 1 {
             return data.[0]
@@ -216,6 +217,7 @@ pub func readColumn[T](result: ^libpq.PGresult, row: i32, col: i32): !T {
         }
     }
     else #if T.isBoolean {
+        var data = libpq.PQgetvalue(result, row, col)
         var format = libpq.PQfformat(result, col)
         if format == 1 {
             return data.[0] != 0 as char
@@ -225,6 +227,7 @@ pub func readColumn[T](result: ^libpq.PGresult, row: i32, col: i32): !T {
         }
     }
     else #if T.isInteger {
+        var data = libpq.PQgetvalue(result, row, col)
         var format = libpq.PQfformat(result, col)
         if format == 1 {
             // Binary format
@@ -255,6 +258,7 @@ pub func readColumn[T](result: ^libpq.PGresult, row: i32, col: i32): !T {
         }
     }
     else #if T.isFloat {
+        var data = libpq.PQgetvalue(result, row, col)
         var format = libpq.PQfformat(result, col)
         if format == 1 {
             // Binary format
@@ -280,8 +284,9 @@ pub func readColumn[T](result: ^libpq.PGresult, row: i32, col: i32): !T {
         }
     }
     else #if T.isString {
+        var data = libpq.PQgetvalue(result, row, col)
         #if #T == #string {
-            return data
+            return data !: string
         }
         else #if #T == #__string {
             var length = libpq.PQgetlength(result, row, col)
