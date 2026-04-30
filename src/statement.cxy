@@ -8,7 +8,7 @@ else {
 }
 
 import { Vector } from "stdlib/vector.cxy"
-import "stdlib/coro.cxy"
+import { State } from "stdlib/coro.cxy"
 import { PgError, PgQueryError } from "./errors.cxy"
 import { PgResult } from "./result.cxy"
 import { bindParam, BindResult } from "./types.cxy"
@@ -149,9 +149,9 @@ pub class PgStatement {
             else {
                 // Need to wait for socket to be writable
                 var timeout = _timeout > 0 ? <u64>_timeout : 0
-                var waitStatus = fdWaitWrite(sock, timeout)
-                if waitStatus != 0 {
-                    raise PgQueryError(f"Wait for write failed with status {waitStatus}")
+                var rc = fdWaitWrite(sock, timeout)
+                if rc != State.AE_WRITABLE {
+                    raise PgQueryError(f"Wait for write failed with status {rc}")
                 }
             }
         }
@@ -162,9 +162,9 @@ pub class PgStatement {
             // Check if data is available
             if libpq.PQisBusy(_conn) != 0 {
                 var timeout = _timeout > 0 ? <u64>_timeout : 0
-                var waitStatus = fdWaitRead(sock, timeout)
-                if waitStatus != 0 {
-                    raise PgQueryError(f"Wait for read failed with status {waitStatus}")
+                var rc = fdWaitRead(sock, timeout)
+                if rc != State.AE_READABLE {
+                    raise PgQueryError(f"Wait for read failed with status {rc}")
                 }
             }
 
@@ -194,12 +194,13 @@ pub class PgStatement {
                      status != libpq.ExecStatusType.PGRES_COPY_IN &&
                      status != libpq.ExecStatusType.PGRES_COPY_BOTH {
                 // Error occurred
-                var errMsg = libpq.PQresultErrorMessage(res)
+                var errMsg =
+                    f"Async query '{_sql}' failed: {libpq.PQresultErrorMessage(res) !: string}"
                 libpq.PQclear(res)
                 if finalResult != null {
                     libpq.PQclear(finalResult)
                 }
-                raise PgQueryError(f"Async query '{_sql}' failed: {errMsg !: string}")
+                raise PgQueryError(&&errMsg)
             }
             else {
                 // Skip intermediate results

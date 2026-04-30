@@ -66,6 +66,34 @@ CMD ["myapp"]
 
 **Note:** The `-dev` packages include headers and static libraries needed for compilation. Runtime containers only need the shared libraries (`.so` files).
 
+## Docker Setup
+
+For local development and testing, use the included `docker-compose.yml`:
+
+```bash
+# Start PostgreSQL
+docker-compose up -d
+
+# Check status
+docker-compose ps
+
+# View logs
+docker-compose logs -f
+
+# Stop and remove
+docker-compose down
+
+# Stop and remove data volume
+docker-compose down -v
+```
+
+The docker-compose setup provides:
+- PostgreSQL 16 Alpine
+- Database: `testdb`
+- User: `postgres` / Password: `postgres`
+- Port: `54320` (mapped to avoid conflicts with local PostgreSQL)
+- Persistent volume for data
+
 ## Quick Start
 
 ```cxy
@@ -102,7 +130,7 @@ import { Database } from "@postgres"
 
 // URI format (recommended)
 var db = Database.open("postgresql://user:pass@localhost/mydb")
-var db = Database.open("postgresql://user:pass@localhost:5432/mydb")
+var db = Database.open("postgresql://user:pass@localhost:54320/mydb")
 var db = Database.open("postgres://user@localhost/mydb")  // No password
 
 // Key-value format
@@ -124,7 +152,7 @@ var db = Database.open(
 
 **Connection String Formats:**
 - **URI**: `postgresql://[user[:password]@][host][:port][/dbname][?param=value]`
-- **Key-Value**: `host=localhost port=5432 dbname=mydb user=postgres password=secret`
+- **Key-Value**: `host=localhost port=54320 dbname=mydb user=postgres password=secret`
 
 ### Executing Queries
 
@@ -716,9 +744,9 @@ launch {
 **Problem:** `PgConnectionError: could not connect to server`
 
 **Solutions:**
-- Verify PostgreSQL is running: `pg_isready -h localhost -p 5432`
+- Verify PostgreSQL is running: `docker-compose ps` or `pg_isready -h localhost -p 54320`
 - Check connection string format and credentials
-- Ensure firewall allows connections to PostgreSQL port (default: 5432)
+- Ensure firewall allows connections to PostgreSQL port (54320 for docker-compose)
 - Verify `pg_hba.conf` allows connections from your host
 - Check if PostgreSQL is listening on the correct interface in `postgresql.conf`
 

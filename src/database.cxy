@@ -51,6 +51,7 @@ pub class Database {
 
     func `deinit`() {
         _notify.send(false) // cancel cleanup
+        yld() // yield to allow cleanup to complete
         for handle, _ in _pool {
             if handle.conn != null {
                 libpq.PQfinish(handle.conn)
@@ -69,9 +70,9 @@ pub class Database {
 
         var status = libpq.PQstatus(testConn)
         if status != libpq.ConnStatusType.CONNECTION_OK {
-            var errMsg = libpq.PQerrorMessage(testConn)
+            var errMsg = f"Connection failed: {libpq.PQerrorMessage(testConn) !: string}"
             libpq.PQfinish(testConn)
-            raise PgConnectionError(f"Connection failed: {errMsg !: string}")
+            raise PgConnectionError(&&errMsg)
         }
 
         libpq.PQfinish(testConn)
@@ -108,9 +109,9 @@ pub class Database {
 
         var status = libpq.PQstatus(conn)
         if status != libpq.ConnStatusType.CONNECTION_OK {
-            var errMsg = libpq.PQerrorMessage(conn)
+            var errMsg = f"Connection failed: {libpq.PQerrorMessage(conn) !: string}"
             libpq.PQfinish(conn)
-            raise PgConnectionError(f"Connection failed: {errMsg !: string}")
+            raise PgConnectionError(&&errMsg)
         }
 
         if _keepAlive > 0 {

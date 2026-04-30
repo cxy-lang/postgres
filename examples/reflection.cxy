@@ -233,16 +233,18 @@ func main(): !void {
     println("The createTable[T] method analyzes struct fields and @sql attributes")
     println("to generate CREATE TABLE DDL automatically.\n")
 
-    var connStr = "host=localhost port=5432 dbname=testdb user=postgres password=postgres"
+    var connStr = "host=localhost port=54320 dbname=testdb user=postgres password=postgres"
 
     println("Connecting to PostgreSQL...")
     var db = Database.open(connStr) catch {
         println("Failed to connect: ", ex!.what())
-        println("\nStart PostgreSQL with Docker:")
+        println("\nStart PostgreSQL with docker-compose:")
+        println("  docker-compose up -d")
+        println("\nOr with docker run:")
         println("  docker run --name postgres-test \\")
         println("    -e POSTGRES_PASSWORD=postgres \\")
         println("    -e POSTGRES_DB=testdb \\")
-        println("    -p 5432:5432 -d postgres:16-alpine")
+        println("    -p 54320:5432 -d postgres:16-alpine")
         return
     }
 

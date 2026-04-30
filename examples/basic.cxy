@@ -173,7 +173,7 @@ func cleanupTable(db: &Database): !void {
 
 func main(): !void {
     // Connection string - modify as needed
-    var connStr = "host=localhost port=5432 dbname=testdb user=postgres password=postgres"
+    var connStr = "host=localhost port=54320 dbname=testdb user=postgres password=postgres"
 
     println("Connecting to PostgreSQL...")
 
@@ -182,12 +182,12 @@ func main(): !void {
         println("Failed to connect to database: ", ex!.what())
         println("\nPlease ensure PostgreSQL is running and the connection parameters are correct:")
         println("  - Host: localhost")
-        println("  - Port: 5432")
+        println("  - Port: 54320")
         println("  - Database: testdb")
         println("  - User: postgres")
         println("  - Password: postgres")
-        println("\nYou can create the database with:")
-        println("  psql -U postgres -c 'CREATE DATABASE testdb'")
+        println("\nStart PostgreSQL with docker-compose:")
+        println("  docker-compose up -d")
         return
     }
 

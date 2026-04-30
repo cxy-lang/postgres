@@ -10,14 +10,30 @@ dependencies: []
 tests:
   - file: "src/**/*.cxy"
 
-
 install:
   - name: libpq
+    required: true
     script: |
       if [ $(uname) = "Darwin" ]; then
         # Find libpq on macOS
         cxy package find-system libpq --include-dir \
           --search-root /opt/homebrew/opt/libpq \
           --lib-dir
+      else
+        cxy package find-system libpq --include-dir \
+          --lib-dir
       fi
 
+builds:
+  async-example:
+    entry: examples/async.cxy
+    output: async-example
+  basic-example:
+    entry: examples/basic.cxy
+    output: basic-example
+  reference-example:
+    entry: examples/reference.cxy
+    output: reference-example
+  simple-example:
+    entry: examples/simple-async.cxy
+    output: simple-example

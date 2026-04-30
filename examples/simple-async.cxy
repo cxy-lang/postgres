@@ -1,0 +1,82 @@
+import { Database } from "../src/database.cxy"
+
+func main(): !void {
+    println("Simple Asynchronous PostgreSQL Example")
+    println("=======================================")
+
+    var connStr = "host=localhost port=54320 dbname=testdb user=postgres password=postgres"
+
+    println("\nConnecting to database...")
+    var db = Database.open(connStr, "public", true) catch {
+        println("Failed to connect: ", ex!.what())
+        println("\nMake sure PostgreSQL is running:")
+        println("  docker-compose up -d")
+        return
+    }
+    println("✓ Connected with async mode!")
+
+    var conn = db.connection()
+
+    // Create table
+    println("\nCreating users table...")
+    conn.exec("DROP TABLE IF EXISTS users")
+    conn.exec("""
+        CREATE TABLE users (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL,
+            email TEXT NOT NULL,
+            age INTEGER NOT NULL
+        )
+    """)
+    println("✓ Table created")
+
+    // Insert data
+    println("\nInserting users...")
+    conn.exec(
+        "INSERT INTO users (name, email, age) VALUES ($1, $2, $3)",
+        "Alice Johnson",
+        "alice@example.com",
+        28
+    )
+    conn.exec(
+        "INSERT INTO users (name, email, age) VALUES ($1, $2, $3)",
+        "Bob Smith",
+        "bob@example.com",
+        35
+    )
+    conn.exec(
+        "INSERT INTO users (name, email, age) VALUES ($1, $2, $3)",
+        "Charlie Brown",
+        "charlie@example.com",
+        22
+    )
+    println("✓ Inserted 3 users")
+
+    // Query data
+    println("\nQuerying users:")
+    var result = conn.exec("SELECT id, name, email, age FROM users ORDER BY id")
+    while result.next() {
+        var id = result.column[i64](0)
+        var name = result.column[String](1)
+        var email = result.column[String](2)
+        var age = result.column[i32](3)
+        println(f"  {id}. {name} ({email}) - Age: {age}")
+    }
+
+    // Count query
+    println("\nUser statistics:")
+    var countResult = conn.exec("SELECT COUNT(*), AVG(age) FROM users")
+    if countResult.next() {
+        var count = countResult.column[i64](0)
+        var avgAge = countResult.column[f64](1)
+        println(f"  Total users: {count}")
+        println(f"  Average age: {avgAge}")
+    }
+
+    // Cleanup
+    println("\nCleaning up...")
+    conn.exec("DROP TABLE users")
+    println("✓ Table dropped")
+
+    println("\n✓ Example completed successfully with async I/O!")
+}

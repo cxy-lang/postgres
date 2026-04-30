@@ -1,0 +1,284 @@
+import { Database } from "../src/database.cxy"
+import { PgConnection } from "../src/connection.cxy"
+import { Vector } from "stdlib/vector.cxy"
+import { CoWaitGroup } from "stdlib/coro.cxy"
+
+import "stdlib.h" as cstdlib
+
+struct ServerLog {
+    id: i64 = 0
+    server: String = null
+    message: String = null
+    timestamp: i64 = 0
+}
+
+func printSeparator() {
+    println("============================================================")
+}
+
+func setupTestTable(db: &Database): !void {
+    var conn = db.connection()
+
+    // Drop and recreate table
+    conn.exec("DROP TABLE IF EXISTS server_logs")
+    conn.exec("""
+        CREATE TABLE server_logs (
+            id SERIAL PRIMARY KEY,
+            server TEXT NOT NULL,
+            message TEXT NOT NULL,
+            timestamp BIGINT NOT NULL
+        )
+    """)
+
+    // Insert sample data
+    for i in 0..100 {
+        var server = f"server-{i % 10}"
+        var message = f"Log entry {i}"
+        conn.exec(
+            "INSERT INTO server_logs (server, message, timestamp) VALUES ($1, $2, $3)",
+            server,
+            message,
+            <i64>i * 1000
+        )
+    }
+
+    println("✓ Created test table with 100 log entries")
+}
+
+func queryServer(db: &Database, serverName: String, queryNum: i32): !i64 {
+    var conn = db.connection()
+    var result = conn.exec("SELECT COUNT(*) FROM server_logs WHERE server = $1", serverName)
+
+    if result.next() {
+        var count = result.column[i64](0)
+        println(f"  Query {queryNum}: Server '{serverName}' has {count} logs")
+        return count
+    }
+    return 0 as i64
+}
+
+func heavyQuery(conn: PgConnection, queryNum: i32): !void {
+    // Simulate a heavier query with multiple joins/aggregations
+    var result = conn.exec("""
+        SELECT server, COUNT(*) as log_count, AVG(timestamp) as avg_time
+        FROM server_logs
+        WHERE timestamp > $1
+        GROUP BY server
+        ORDER BY log_count DESC
+        LIMIT 5
+    """, <i64>(queryNum * 1000))
+
+    println(f"\n  Query {queryNum} - Top 5 servers:")
+    while result.next() {
+        var server = result.column[String](0)
+        var count = result.column[i64](1)
+        var avgTime = result.column[f64](2)
+        var avgTimeInt = <i64>avgTime
+        println("    ", server, ": ", count, " logs, avg timestamp: ", avgTimeInt)
+    }
+}
+
+func demonstrateSyncMode(connStr: String): !void {
+    println("")
+    printSeparator()
+    println("SYNCHRONOUS MODE (async = false)")
+    printSeparator()
+
+    var db = Database.open(connStr, "public", false, -1, 60000)
+
+    setupTestTable(&db)
+
+    println("\n--- Running 5 concurrent queries synchronously ---")
+    var startTime = timestamp()
+
+    // Launch 5 queries concurrently (but they will block on I/O)
+    for i in 0..5 {
+        async queryServer(&db, f"server-{i}", i + 1)
+    }
+
+    // Wait for all to complete
+    sleepAsync(2000)
+
+    var elapsed = timestamp() - startTime
+    println(f"\n✓ Completed 5 queries in {elapsed}ms (sync mode)")
+    println("  Note: Queries blocked waiting for database I/O")
+
+    // Cleanup
+    var conn = db.connection()
+    conn.exec("DROP TABLE IF EXISTS server_logs")
+}
+
+func demonstrateAsyncMode(connStr: String): !void {
+    println("")
+    printSeparator()
+    println("ASYNCHRONOUS MODE (async = true)")
+    printSeparator()
+
+    var db = Database.open(connStr, "public", true, -1, 60000)
+
+    setupTestTable(&db)
+
+    println("\n--- Running 5 concurrent queries asynchronously ---")
+    var startTime = timestamp()
+
+    // Launch 5 queries concurrently (non-blocking I/O)
+    for i in 0..5 {
+        async queryServer(&db, f"server-{i}", i + 1)
+    }
+
+    // Wait for all to complete
+    sleepAsync(2000)
+
+    var elapsed = timestamp() - startTime
+    println(f"\n✓ Completed 5 queries in {elapsed}ms (async mode)")
+    println("  Note: Queries overlapped - better throughput!")
+
+    // Cleanup
+    var conn = db.connection()
+    conn.exec("DROP TABLE IF EXISTS server_logs")
+}
+
+func demonstrateAsyncHeavyQueries(connStr: String): !void {
+    println("")
+    printSeparator()
+    println("ASYNC MODE - HEAVY QUERIES")
+    printSeparator()
+
+    var db = Database.open(connStr, "public", true, 5000, 60000)  // 5 second timeout
+
+    setupTestTable(&db)
+
+    println("\n--- Running 3 heavy concurrent queries asynchronously ---")
+    var startTime = timestamp()
+
+    // Launch 3 heavy queries concurrently
+    var wg = CoWaitGroup()
+    for i in 0..3 {
+        async {
+            wg.add()
+            heavyQuery(db.connection(), i + 1)
+            wg.done()
+        }
+    }
+
+    // Wait for completion
+    println("Waiting for queries to complete...")
+    wg.wait()
+    println("Done Waiting")
+
+    var elapsed = timestamp() - startTime
+    println(f"\n✓ Completed 3 heavy queries in {elapsed}ms")
+
+    // Cleanup
+    var conn = db.connection()
+    conn.exec("DROP TABLE IF EXISTS server_logs")
+}
+
+func demonstrateAsyncWithPooling(connStr: String): !void {
+    println("")
+    printSeparator()
+    println("ASYNC MODE + CONNECTION POOLING")
+    printSeparator()
+
+    var db = Database.open(connStr, "public", true, -1, 60000)
+
+    setupTestTable(&db)
+
+    println(f"\nInitial pool size: {db.poolSize()}")
+    println("\n--- Running 10 rapid concurrent queries ---")
+
+    var startTime = timestamp()
+
+    // Spawn many concurrent queries - pool will reuse connections
+    for i in 0..10 {
+        async queryServer(&db, f"server-{i % 10}", i + 1)
+    }
+
+    sleepAsync(3000)
+
+    var elapsed = timestamp() - startTime
+    println(f"\nPool size after queries: {db.poolSize()}")
+    println(f"✓ Completed 10 queries in {elapsed}ms using connection pool")
+    println("  Connections were reused from pool efficiently!")
+
+    // Cleanup
+    var conn = db.connection()
+    conn.exec("DROP TABLE IF EXISTS server_logs")
+}
+
+func demonstrateTimeout(connStr: String): !void {
+    println("")
+    printSeparator()
+    println("ASYNC MODE - TIMEOUT HANDLING")
+    printSeparator()
+
+    // Use very short timeout to demonstrate timeout handling
+    var db = Database.open(connStr, "public", true, 1, 60000)  // 1ms timeout (very short!)
+
+    setupTestTable(&db)
+
+    println("\n--- Testing with 1ms timeout (will likely timeout) ---")
+
+    // This query will likely timeout with such a short timeout
+    var conn = db.connection() catch {
+        println("Failed to get connection: ", ex!.what())
+        return
+    }
+
+    @unused var result = conn.exec("SELECT pg_sleep(0.1)") catch {
+        println("✓ Query timed out as expected: ", ex!.what())
+        conn.exec("DROP TABLE IF EXISTS server_logs")
+        return
+    }
+
+    println("Query completed (unexpected)")
+
+    // Cleanup
+    conn.exec("DROP TABLE IF EXISTS server_logs") catch discard
+}
+
+func main(): !void {
+    printSeparator()
+    println("PostgreSQL ASYNC CONNECTION EXAMPLE")
+    printSeparator()
+    println("\nThis example demonstrates the difference between synchronous")
+    println("and asynchronous connection modes in PostgreSQL.")
+    println("\nAsync mode benefits:")
+    println("  • Non-blocking I/O - better concurrency")
+    println("  • Multiple queries can overlap execution")
+    println("  • Better resource utilization")
+    println("  • Timeout support for long-running queries")
+
+    var connStr = "host=localhost port=54320 dbname=testdb user=postgres password=postgres"
+
+    // Run demonstrations (first demo will test connection)
+    demonstrateSyncMode(connStr) catch {
+        println("\n✗ Sync mode demo failed: ", ex!.what())
+    }
+
+    demonstrateAsyncMode(connStr) catch {
+        println("\n✗ Async mode demo failed: ", ex!)
+    }
+    demonstrateAsyncHeavyQueries(connStr) catch {
+        println("\n✗ Heavy queries demo failed: ", ex!.what())
+    }
+
+    demonstrateAsyncWithPooling(connStr) catch {
+        println("\n✗ Pooling demo failed: ", ex!.what())
+    }
+
+    demonstrateTimeout(connStr) catch {
+        println("\n✗ Timeout demo failed: ", ex!.what())
+    }
+
+    println("")
+    printSeparator()
+    println("✓ ALL ASYNC EXAMPLES COMPLETED")
+    printSeparator()
+    println("\nKey takeaways:")
+    println("  • Use async=true for better concurrency")
+    println("  • Async mode allows overlapping query execution")
+    println("  • Set timeout parameter to handle slow queries")
+    println("  • Combine with connection pooling (keepAlive) for best performance")
+    println("  • Async mode uses fdWaitRead/fdWaitWrite for non-blocking I/O")
+}
