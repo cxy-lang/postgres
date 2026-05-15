@@ -1,6 +1,6 @@
 package:
   name: postgres
-  version: 0.1.2
+  version: 0.1.3
   author: Carter Mbotho<lastcarter@gmail.com>
   description: A wrapper around Postgres SQL database that can be used by Cxy applications
   license: MIT
