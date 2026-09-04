@@ -1,0 +1,162 @@
+import { Database } from "../src/database.cxy"
+import { PgConnection } from "../src/connection.cxy"
+import { BoundParams } from "../src/types.cxy"
+
+// A filter where any combination of fields may or may not be set at
+// runtime. There's no way to know ahead of time how many SQL parameters
+// a given search will need.
+struct ProductFilter {
+    category: String = null
+    minPrice: f64 = -1.0
+    maxPrice: f64 = -1.0
+    inStockOnly: bool = false
+}
+
+func setupProducts(db: &Database): !void {
+    var conn = db.connection()
+
+    conn.exec("DROP TABLE IF EXISTS products")
+    conn.exec("""
+        CREATE TABLE products (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL,
+            category TEXT NOT NULL,
+            price DOUBLE PRECISION NOT NULL,
+            in_stock BOOLEAN NOT NULL
+        )
+    """)
+
+    conn.exec(
+        "INSERT INTO products (name, category, price, in_stock) VALUES ($1, $2, $3, $4)",
+        "Laptop", "Electronics", 999.99, true
+    )
+    conn.exec(
+        "INSERT INTO products (name, category, price, in_stock) VALUES ($1, $2, $3, $4)",
+        "Mouse", "Electronics", 29.99, true
+    )
+    conn.exec(
+        "INSERT INTO products (name, category, price, in_stock) VALUES ($1, $2, $3, $4)",
+        "Desk", "Furniture", 249.50, false
+    )
+    conn.exec(
+        "INSERT INTO products (name, category, price, in_stock) VALUES ($1, $2, $3, $4)",
+        "Chair", "Furniture", 89.00, true
+    )
+    conn.exec(
+        "INSERT INTO products (name, category, price, in_stock) VALUES ($1, $2, $3, $4)",
+        "Monitor", "Electronics", 199.99, false
+    )
+
+    println("✓ Created 'products' table with 5 sample rows")
+}
+
+// Builds a WHERE clause whose parameter count depends entirely on which
+// filters are active at runtime. `exec(...args: auto)` can't help here
+// because it needs the full argument list at the call site at compile
+// time. `BoundParams` + `PgStatement.execWithParams` let us bind
+// parameters one at a time as we decide we need them.
+func searchProducts(conn: PgConnection, filter: &const ProductFilter): !void {
+    var sql = String("SELECT name, category, price, in_stock FROM products WHERE true")
+    var params = BoundParams()
+    var idx: i32 = 0
+
+    if filter.category != null && filter.category.size() > 0 {
+        sql << " AND category = "
+        PgConnection.param(&sql, idx)
+        params.bind[String](&filter.category)
+        idx += 1
+    }
+
+    if filter.minPrice >= 0.0 {
+        sql << " AND price >= "
+        PgConnection.param(&sql, idx)
+        params.bind[f64](&filter.minPrice)
+        idx += 1
+    }
+
+    if filter.maxPrice >= 0.0 {
+        sql << " AND price <= "
+        PgConnection.param(&sql, idx)
+        params.bind[f64](&filter.maxPrice)
+        idx += 1
+    }
+
+    if filter.inStockOnly {
+        sql << " AND in_stock = true"
+    }
+
+    sql << " ORDER BY price"
+
+    println(f"\n  SQL: {sql}")
+
+    var stmt = conn.prepare(&&sql)
+    var result = stmt.execWithParams(&params)
+
+    while result.next() {
+        var name = result.column[String](0)
+        var category = result.column[String](1)
+        var price = result.column[f64](2)
+        var inStock = result.column[bool](3)
+        println(f"    - {name} [{category}] ${price} (in stock: {inStock})")
+    }
+}
+
+func main(): !void {
+    println("=== Dynamic Parameter Binding Example ===")
+    println("Demonstrates BoundParams + PgStatement.execWithParams for")
+    println("queries whose parameter count isn't known until runtime.\n")
+
+    var connStr = "host=localhost port=54320 dbname=testdb user=postgres password=postgres"
+
+    var db = Database.open(connStr, "public", false, -1, 60000) catch {
+        println("Failed to connect: ", ex!.what())
+        println("\nStart PostgreSQL with docker-compose:")
+        println("  docker-compose up -d")
+        return
+    }
+
+    println("✓ Connected to PostgreSQL")
+
+    setupProducts(&db) catch {
+        println("Failed to set up products table: ", ex!.what())
+        return
+    }
+
+    var conn = db.connection() catch {
+        println("Failed to get connection: ", ex!.what())
+        return
+    }
+
+    println("\n--- Filter: category = Electronics ---")
+    var byCategory = ProductFilter{category: "Electronics".S}
+    searchProducts(conn, &byCategory) catch {
+        println("Search failed: ", ex!.what())
+    }
+
+    println("\n--- Filter: price between 50 and 300 ---")
+    var byPrice = ProductFilter{minPrice: 50.0, maxPrice: 300.0}
+    searchProducts(conn, &byPrice) catch {
+        println("Search failed: ", ex!.what())
+    }
+
+    println("\n--- Filter: in stock only ---")
+    var inStock = ProductFilter{inStockOnly: true}
+    searchProducts(conn, &inStock) catch {
+        println("Search failed: ", ex!.what())
+    }
+
+    println("\n--- Filter: category = Electronics AND in stock ---")
+    var combined = ProductFilter{category: "Electronics".S, inStockOnly: true}
+    searchProducts(conn, &combined) catch {
+        println("Search failed: ", ex!.what())
+    }
+
+    println("\n--- Filter: none (no filters applied) ---")
+    var none = ProductFilter{}
+    searchProducts(conn, &none) catch {
+        println("Search failed: ", ex!.what())
+    }
+
+    conn.exec("DROP TABLE IF EXISTS products") catch discard
+    println("\n✓ Dynamic parameter example completed successfully!")
+}

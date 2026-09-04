@@ -18,6 +18,9 @@ builds:
   simple-example:
     entry: examples/simple-async.cxy
     output: simple-example
+  dynamic-params-example:
+    entry: examples/dynamic-params.cxy
+    output: dynamic-params-example
 
 dependencies: []
 

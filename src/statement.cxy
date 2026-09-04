@@ -11,7 +11,7 @@ import { Vector } from "stdlib/vector.cxy"
 import { State } from "stdlib/coro.cxy"
 import { PgError, PgQueryError } from "./errors.cxy"
 import { PgResult } from "./result.cxy"
-import { bindParam, BindResult } from "./types.cxy"
+import { bindParam, BindResult, BoundParams } from "./types.cxy"
 type CharPtr = ^char
 
 pub class PgStatement {
@@ -64,6 +64,38 @@ pub class PgStatement {
                 ptrof formats.[0],
                 ptrof oids.[0],
                 #{numArgs} as i32
+            )
+        }
+    }
+
+    func execWithParams(params: &const BoundParams): !PgResult {
+        var values = Vector[^const char]()
+        var lengths = Vector[i32]()
+        var formats = Vector[i32]()
+        var oids = Vector[u32]()
+        for result in params.results {
+            values.push(result.0.value)
+            lengths.push(result.0.length)
+            formats.push(result.0.format)
+            oids.push(result.0.oid)
+        }
+
+        if _async {
+            return this.execAsync(
+                values.data(),
+                lengths.data(),
+                formats.data(),
+                oids.data(),
+                params.results.size() as i32
+            )
+        }
+        else {
+            return this.execSync(
+                values.data(),
+                lengths.data(),
+                formats.data(),
+                oids.data(),
+                params.results.size() as i32
             )
         }
     }

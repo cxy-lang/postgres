@@ -1,6 +1,7 @@
 module types
 
 import { htonl, htons, ntohs, ntohl } from "stdlib/endian.cxy"
+import { Vector } from "stdlib/vector.cxy"
 
 ##if (defined MACOS) {
     import "libpq-fe.h" as libpq
@@ -84,6 +85,7 @@ pub func getOid[T](): u32 {
 
 // Bind parameter result
 pub struct BindResult {
+    bound: bool = false
     buffer: [u8, 16] = null
     value: ^const char = null
     length: i32 = 0
@@ -184,6 +186,16 @@ pub func bindParam[T](result: &BindResult, param: &const T) {
     }
     else {
         error!("type {t} is not supported for PostgreSQL binding", #T)
+    }
+}
+
+pub struct BoundParams {
+    results = Vector[BindResult]()
+    func `init`() {}
+
+    func bind[T](param: &const T) {
+        results.push(BindResult{bound: true})
+        bindParam(&results.back(), param)
     }
 }
 

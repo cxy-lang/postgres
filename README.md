@@ -540,6 +540,47 @@ var result2 = stmt.exec(25)
 var result3 = stmt.exec(30)
 ```
 
+### Dynamic Parameter Binding
+
+`exec(...args)` requires the full parameter list at the call site, so it
+only works when the number of parameters is known at compile time. When a
+query's parameter count depends on runtime conditions (e.g. optional search
+filters), build a `BoundParams` and pass it to `PgStatement.execWithParams`
+instead:
+
+```cxy
+import { BoundParams } from "postgres/types.cxy"
+
+func searchProducts(conn: PgConnection, category: String, minPrice: f64): !PgResult {
+    var sql = String("SELECT name, price FROM products WHERE true")
+    var params = BoundParams()
+    var idx: i32 = 0
+
+    if category != null && category.size() > 0 {
+        sql << " AND category = "
+        PgConnection.param(&sql, idx)
+        params.bind[String](&category)
+        idx += 1
+    }
+
+    if minPrice >= 0.0 {
+        sql << " AND price >= "
+        PgConnection.param(&sql, idx)
+        params.bind[f64](&minPrice)
+        idx += 1
+    }
+
+    var stmt = conn.prepare(&&sql)
+    return stmt.execWithParams(&params)
+}
+```
+
+See `examples/dynamic-params.cxy` for a complete, runnable example.
+
+> **Note:** `String` fields default to `null`, not an empty string. Always
+> guard with `!= null` before calling methods like `.size()` on a `String`
+> that may not have been assigned.
+
 ### Optional Fields (NULL Handling)
 
 ```cxy
