@@ -195,13 +195,13 @@ pub func bindParam[T](result: &BindResult, param: &const T) {
     else #if T.isString {
         #if #T == #string {
             result.value = param !: ^const char
-            result.length = <i32>strlen(param)
+            result.length = 0
             result.format = 0  // text
         }
         else {
             result.value = param.str()
             result.length = <i32>param.size()
-            result.format = 0  // text
+            result.format = 1  // binary
         }
     }
     else #if T.isStruct && T.attributes.[:json] {
@@ -209,7 +209,7 @@ pub func bindParam[T](result: &BindResult, param: &const T) {
         toJSON(&result.str, param)
         result.value = result.str.str()
         result.length = <i32>result.str.size()
-        result.format = 0  // text
+        result.format = 1  // binary
     }
     else {
         error!("type {t} is not supported for PostgreSQL binding", #T)
@@ -335,7 +335,7 @@ pub func readColumn[T](result: ^libpq.PGresult, row: i32, col: i32): !T {
         }
         else {
             var length = libpq.PQgetlength(result, row, col)
-            return String(data, length)
+            return String(data !: string, length)
         }
     }
     else #if T.isStruct && T.attributes.[:json] {
