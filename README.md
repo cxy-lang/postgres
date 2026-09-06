@@ -471,6 +471,7 @@ println(f"Pool size: {db.poolSize()}")
 - Strings: `string`, `String`, `__string`
 - Boolean: `bool`
 - Character: `char`
+- JSONB: any `@json`-annotated struct (see below)
 
 ### Result Reading
 
@@ -479,6 +480,35 @@ All parameter types plus:
 - Optionals: `i32?`, `String?`, etc. (maps NULL values)
 - Tuples: `(i64, String, bool)`
 - Structs: Any struct with default constructor
+
+### JSONB Columns
+
+Annotate a struct with `@json` to bind and read it as a `jsonb` column.
+The struct is serialized/deserialized with the standard library's
+`toJSON`/`parse` on the way in and out:
+
+```cxy
+@json
+struct BuildConfig {
+    target: String = null
+    optLevel: i32 = 0
+    debug: bool = false
+}
+
+conn.exec("CREATE TABLE builds (id SERIAL PRIMARY KEY, config JSONB NOT NULL)")
+
+var cfg = BuildConfig{target: "wasm32".S, optLevel: 2, debug: true}
+conn.exec("INSERT INTO builds (config) VALUES ($1)", cfg)
+
+var result = conn.exec("SELECT config FROM builds")
+while result.next() {
+    var config = result.column[BuildConfig](0)
+    println(f"target={config.target} optLevel={config.optLevel}")
+}
+```
+
+Without `@json`, binding a plain struct as a parameter isn't supported and
+will fail to compile with "type ... is not supported for PostgreSQL binding".
 
 ## Error Handling
 
@@ -553,7 +583,9 @@ import { BoundParams } from "postgres/types.cxy"
 
 func searchProducts(conn: PgConnection, category: String, minPrice: f64): !PgResult {
     var sql = String("SELECT name, price FROM products WHERE true")
-    var params = BoundParams()
+    // Pass an upper bound on the number of parameters that may be bound so
+    // the underlying Vector never reallocates mid-bind.
+    var params = BoundParams(2)
     var idx: i32 = 0
 
     if category != null && category.size() > 0 {

@@ -57,7 +57,9 @@ func setupProducts(db: &Database): !void {
 // parameters one at a time as we decide we need them.
 func searchProducts(conn: PgConnection, filter: &const ProductFilter): !void {
     var sql = String("SELECT name, category, price, in_stock FROM products WHERE true")
-    var params = BoundParams()
+    // Up to 3 parameters may be bound (category, minPrice, maxPrice); reserve
+    // that capacity up front so the Vector never reallocates mid-bind.
+    var params = BoundParams(3)
     var idx: i32 = 0
 
     if filter.category != null && filter.category.size() > 0 {

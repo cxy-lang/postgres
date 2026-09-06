@@ -2,6 +2,7 @@ module types
 
 import { htonl, htons, ntohs, ntohl } from "stdlib/endian.cxy"
 import { Vector } from "stdlib/vector.cxy"
+import { parse, toJSON } from "stdlib/json.cxy"
 
 ##if (defined MACOS) {
     import "libpq-fe.h" as libpq
@@ -78,6 +79,9 @@ pub func getOid[T](): u32 {
     else #if T.isOptional {
         return getOid[#{T.targetType}]()
     }
+    else #if T.isStruct && T.attributes.[:json] {
+        return JSONBOID
+    }
     else {
         error!("type {t} is not supported for PostgreSQL binding", #T)
     }
@@ -87,10 +91,26 @@ pub func getOid[T](): u32 {
 pub struct BindResult {
     bound: bool = false
     buffer: [u8, 16] = null
+    // Owns the backing memory for parameters whose serialized form doesn't
+    // fit in `buffer` (e.g. JSON/JSONB). Kept alive as long as this result.
+    str: String = null
     value: ^const char = null
     length: i32 = 0
     format: i32 = 0
     oid: u32 = 0
+
+    func `copy`() {
+        var tmp = This{
+            bound: bound,
+            str: str,
+            value: value,
+            length: length,
+            format: format,
+            oid: oid,
+        }
+        memcpy(tmp.buffer, buffer, 16)
+        return &&tmp
+    }
 }
 
 // Bind a parameter for PQexecParams
@@ -184,14 +204,23 @@ pub func bindParam[T](result: &BindResult, param: &const T) {
             result.format = 0  // text
         }
     }
+    else #if T.isStruct && T.attributes.[:json] {
+        result.str = String()
+        toJSON(&result.str, param)
+        result.value = result.str.str()
+        result.length = <i32>result.str.size()
+        result.format = 0  // text
+    }
     else {
         error!("type {t} is not supported for PostgreSQL binding", #T)
     }
 }
 
 pub struct BoundParams {
-    results = Vector[BindResult]()
-    func `init`() {}
+    results: Vector[BindResult]
+    func `init`(count: i32) {
+        results = Vector[BindResult](count)
+    }
 
     func bind[T](param: &const T) {
         results.push(BindResult{bound: true})
@@ -308,6 +337,11 @@ pub func readColumn[T](result: ^libpq.PGresult, row: i32, col: i32): !T {
             var length = libpq.PQgetlength(result, row, col)
             return String(data, length)
         }
+    }
+    else #if T.isStruct && T.attributes.[:json] {
+        var data = libpq.PQgetvalue(result, row, col)
+        var length = libpq.PQgetlength(result, row, col)
+        return parse[T](__string(data !: string, length))
     }
     else {
         error!("type {t} is not supported for reading from PostgreSQL", #T)

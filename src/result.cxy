@@ -68,7 +68,7 @@ pub class PgResult {
             #for (const i: 0..T.membersCount) {
                 #const M = typeat!(#T, i)
                 if #{i} < _numCols {
-                    res.#{i} = readColumn[#{M}](_result, _row, #{i})
+                    res.#{i} = readColumn[#{M}](_result, _row, #{i} as i32)
                 }
             }
             return &&res
@@ -88,7 +88,7 @@ pub class PgResult {
                     // Use explicit column index
                     #const colId = sqlAttr.[:id]
                     if #{colId} < _numCols {
-                        res.#{mk_ident!(member.name)} = readColumn[#{M}](_result, _row, #{colId})
+                        res.#{mk_ident!(member.name)} = readColumn[#{M}](_result, _row, #{colId} as i32)
                     }
                 }
                 else {
