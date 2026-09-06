@@ -190,6 +190,7 @@ pub class PgStatement {
 
         // Wait for results
         var finalResult: ^libpq.PGresult = null
+        var queryError: String = null
         while true {
             // Check if data is available
             if libpq.PQisBusy(_conn) != 0 {
@@ -226,18 +227,24 @@ pub class PgStatement {
                      status != libpq.ExecStatusType.PGRES_COPY_IN &&
                      status != libpq.ExecStatusType.PGRES_COPY_BOTH {
                 // Error occurred
-                var errMsg =
-                    f"Async query '{_sql}' failed: {libpq.PQresultErrorMessage(res) !: string}"
-                libpq.PQclear(res)
-                if finalResult != null {
-                    libpq.PQclear(finalResult)
+                if queryError == null {
+                    var err =
+                        f"Async query '{_sql}' failed: {libpq.PQresultErrorMessage(res) !: string}"
+                    queryError = &&err
                 }
-                raise PgQueryError(&&errMsg)
+                libpq.PQclear(res)
             }
             else {
                 // Skip intermediate results
                 libpq.PQclear(res)
             }
+        }
+
+        if queryError != null {
+            if finalResult != null {
+                libpq.PQclear(finalResult)
+            }
+            raise PgQueryError(queryError)
         }
 
         if finalResult == null {

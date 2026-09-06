@@ -331,7 +331,7 @@ pub func readColumn[T](result: ^libpq.PGresult, row: i32, col: i32): !T {
         }
         else #if #T == #__string {
             var length = libpq.PQgetlength(result, row, col)
-            return __string(data, length)
+            return __string(data !: string, length)
         }
         else {
             var length = libpq.PQgetlength(result, row, col)

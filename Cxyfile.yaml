@@ -21,6 +21,9 @@ builds:
   dynamic-params-example:
     entry: examples/dynamic-params.cxy
     output: dynamic-params-example
+  async-error-recovery-example:
+    entry: examples/async-error-recovery.cxy
+    output: async-error-recovery-example
 
 dependencies: []
 

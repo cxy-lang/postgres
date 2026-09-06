@@ -1,0 +1,36 @@
+import { Database } from "../src/database.cxy"
+import { PgConnection } from "../src/connection.cxy"
+
+// Query with a bad column name - forces an error result on the wire.
+func badQuery(conn: PgConnection): !void {
+    conn.exec("SELECT this_column_does_not_exist FROM recovery_test")
+}
+
+func main(): !void {
+    var connStr = "host=localhost port=54320 dbname=testdb user=postgres password=postgres"
+    var db = Database.open(connStr, "public", true, -1, 60000) catch {
+        println("connect failed: ", ex!.what())
+        return
+    }
+    var conn = db.connection()
+
+    conn.exec("DROP TABLE IF EXISTS recovery_test")
+    conn.exec("CREATE TABLE recovery_test (id SERIAL PRIMARY KEY, name TEXT NOT NULL)")
+
+    // 1. This query should fail with a Postgres error.
+    badQuery(conn) catch {
+        println("✓ query 1 failed as expected: ", ex!.what())
+    }
+
+    // 2. Before the fix, this would fail with
+    //    "another command is already in progress".
+    conn.exec("INSERT INTO recovery_test (name) VALUES ($1)", "hello") catch {
+        println("✗ query 2 FAILED (bug still present): ", ex!.what())
+        conn.exec("DROP TABLE IF EXISTS recovery_test")
+        return
+    }
+    println("✓ query 2 succeeded right after query 1's error")
+
+    conn.exec("DROP TABLE IF EXISTS recovery_test")
+    println("done")
+}
